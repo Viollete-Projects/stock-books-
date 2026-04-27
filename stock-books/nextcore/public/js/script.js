@@ -7,11 +7,15 @@ let editingId = null;
 async function fetchBooks() {
   try {
     const res = await fetch('/books');
+    if (!res.ok) throw new Error(`Erro ${res.status}`);
+    
     const json = await res.json();
-    books = json.data;
+    books = json.data || [];
     renderTable();
+    updateStats();
   } catch (err) {
-    showToast('Erro ao carregar livros.', 'error');
+    console.error('Erro ao carregar livros:', err);
+    showToast('❌ Erro ao carregar livros.', 'error');
   }
 }
 
@@ -19,7 +23,7 @@ async function fetchBooks() {
    RENDER TABELA
 ========================= */
 function renderTable() {
-  const q = document.getElementById('searchInput').value.toLowerCase();
+  const q = document.getElementById('searchInput')?.value.toLowerCase() || '';
 
   const filtered = books.filter(b =>
     b.titulo.toLowerCase().includes(q) ||
@@ -28,10 +32,11 @@ function renderTable() {
   );
 
   const tbody = document.getElementById('tableBody');
+  if (!tbody) return;
 
   if (filtered.length === 0) {
     tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--muted)">Nenhum livro encontrado</td></tr>`;
-    updateStats();
+    updateStats(); // Atualiza stats mesmo com resultado vazio
     return;
   }
 
@@ -51,25 +56,32 @@ function renderTable() {
     </tr>
   `).join('');
 
-  updateStats();
+  updateStats(); // Atualiza stats após renderizar tabela
 }
 
 /* =========================
    STATS
 ========================= */
 function updateStats() {
-  document.getElementById('stat-livros').textContent = books.length;
+  const livrosEl = document.getElementById('stat-livros');
+  const itensEl = document.getElementById('stat-itens');
+  const valorEl = document.getElementById('stat-valor');
 
-  const totalQtd = books.reduce((s, b) => s + b.qtd, 0);
-  document.getElementById('stat-itens').textContent = totalQtd;
+  if (livrosEl) livrosEl.textContent = books.length;
 
-  const totalVal = books.reduce((s, b) => s + (b.qtd * parseFloat(b.preco)), 0);
-  document.getElementById('stat-valor').textContent =
-    'R$ ' + totalVal.toFixed(2).replace('.', ',');
+  if (itensEl) {
+    const totalQtd = books.reduce((s, b) => s + (parseInt(b.qtd) || 0), 0);
+    itensEl.textContent = totalQtd;
+  }
+
+  if (valorEl) {
+    const totalVal = books.reduce((s, b) => s + ((parseInt(b.qtd) || 0) * parseFloat(b.preco || 0)), 0);
+    valorEl.textContent = 'R$ ' + totalVal.toFixed(2).replace('.', ',');
+  }
 }
 
 /* =========================
-   MODAL
+   MODAL - ABRIR
 ========================= */
 function openModal(mode, id = null) {
   editingId = null;
@@ -83,14 +95,16 @@ function openModal(mode, id = null) {
 
   if (mode === 'edit' && id !== null) {
     const b = books.find(x => x.id === id);
-    if (!b) return;
+    if (!b) {
+      showToast('⚠️ Livro não encontrado.', 'error');
+      return;
+    }
 
     editingId = id;
-
     document.getElementById('modalTitle').textContent = 'Editar Livro';
     document.getElementById('fTitulo').value = b.titulo;
     document.getElementById('fAutor').value = b.autor;
-    document.getElementById('fGenero').value = b.genero;
+    document.getElementById('fGenero').value = b.genero || 'Ficção';
     document.getElementById('fQtd').value = b.qtd;
     document.getElementById('fPreco').value = b.preco;
   }
@@ -98,6 +112,9 @@ function openModal(mode, id = null) {
   document.getElementById('modalOverlay').classList.add('active');
 }
 
+/* =========================
+   MODAL - FECHAR
+========================= */
 function closeModal() {
   document.getElementById('modalOverlay').classList.remove('active');
 }
@@ -107,72 +124,98 @@ function closeModalIfOutside(e) {
 }
 
 /* =========================
-   SALVAR (API)
+   SALVAR LIVRO (API) - ÚNICA VERSÃO
 ========================= */
 async function saveBook() {
   const titulo = document.getElementById('fTitulo').value.trim();
   const autor = document.getElementById('fAutor').value.trim();
-  const genero = document.getElementById('fGenero').value;
+  const genero = document.getElementById('fGenero').value.trim();
   const qtd = parseInt(document.getElementById('fQtd').value);
   const preco = parseFloat(document.getElementById('fPreco').value);
 
-  if (!titulo || !autor || isNaN(qtd) || isNaN(preco)) {
-    showToast('⚠️ Preencha todos os campos obrigatórios.', 'error');
+  // Validação rigorosa
+  if (!titulo || !autor) {
+    showToast('⚠️ Título e Autor são obrigatórios.', 'error');
+    return;
+  }
+
+  if (isNaN(qtd) || qtd < 0) {
+    showToast('⚠️ Quantidade inválida.', 'error');
+    return;
+  }
+
+  if (isNaN(preco) || preco < 0) {
+    showToast('⚠️ Preço inválido.', 'error');
     return;
   }
 
   const data = { titulo, autor, genero, qtd, preco };
+  const method = editingId ? 'PUT' : 'POST';
+  const url = editingId ? `/books/${editingId}` : '/books';
 
   try {
-    if (editingId !== null) {
-      await fetch(`/books/${editingId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-      });
-      showToast('✅ Livro atualizado com sucesso!', 'success');
-    } else {
-      await fetch('/books', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-      });
-      showToast('✅ Livro adicionado com sucesso!', 'success');
+    const response = await fetch(url, {
+      method: method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+      let errorMsg = `Erro ${response.status}`;
+      try {
+        const error = await response.json();
+        errorMsg = error.message || errorMsg;
+      } catch (e) {
+        // Se não conseguir parsear JSON, usa mensagem padrão
+      }
+      throw new Error(errorMsg);
     }
 
+    showToast(editingId ? '✅ Livro atualizado!' : '✅ Livro adicionado!', 'success');
     closeModal();
     fetchBooks();
-
   } catch (err) {
-    showToast('Erro ao salvar livro.', 'error');
+    console.error('Erro ao salvar:', err);
+    showToast('❌ ' + err.message, 'error');
   }
 }
 
 /* =========================
-   DELETAR (API)
+   DELETAR LIVRO (API)
 ========================= */
 async function deleteBook(id) {
   if (!confirm('Deseja remover este livro?')) return;
 
   try {
-    await fetch(`/books/${id}`, {
+    const response = await fetch(`/books/${id}`, {
       method: 'DELETE'
     });
 
+    if (!response.ok) {
+      let errorMsg = `Erro ${response.status}`;
+      try {
+        const error = await response.json();
+        errorMsg = error.message || errorMsg;
+      } catch (e) {
+        // Se não conseguir parsear JSON, usa mensagem padrão
+      }
+      throw new Error(errorMsg);
+    }
+
     showToast('🗑️ Livro removido.', 'success');
     fetchBooks();
-
   } catch (err) {
-    showToast('Erro ao remover livro.', 'error');
+    console.error('Erro ao deletar:', err);
+    showToast('❌ Erro ao remover: ' + err.message, 'error');
   }
 }
 
 /* =========================
-   FUNÇÕES EXTRAS
+   FUNÇÕES AUXILIARES
 ========================= */
 function editFirst() {
   if (books.length === 0) {
-    showToast('Nenhum livro para editar.', 'error');
+    showToast('⚠️ Nenhum livro para editar.', 'error');
     return;
   }
   openModal('edit', books[0].id);
@@ -180,24 +223,29 @@ function editFirst() {
 
 function removeFirst() {
   if (books.length === 0) {
-    showToast('Nenhum livro para remover.', 'error');
+    showToast('⚠️ Nenhum livro para remover.', 'error');
     return;
   }
   deleteBook(books[0].id);
 }
 
 function focusSearch() {
-  document.getElementById('searchInput').focus();
-  document.getElementById('dashboard').scrollIntoView({ behavior: 'smooth' });
+  const searchInput = document.getElementById('searchInput');
+  const dashboard = document.getElementById('dashboard');
+  
+  if (searchInput) searchInput.focus();
+  if (dashboard) dashboard.scrollIntoView({ behavior: 'smooth' });
 }
 
 /* =========================
-   TOAST
+   TOAST NOTIFICAÇÕES
 ========================= */
 let toastTimer;
 
 function showToast(msg, type = 'success') {
   const t = document.getElementById('toast');
+  if (!t) return;
+
   t.textContent = msg;
   t.className = `toast ${type} show`;
 
@@ -207,62 +255,17 @@ function showToast(msg, type = 'success') {
   }, 3000);
 }
 
-// ... (mantenha suas variáveis de estado)
-
-async function saveBook() {
-    const titulo = document.getElementById('fTitulo').value.trim();
-    const autor = document.getElementById('fAutor').value.trim();
-    const genero = document.getElementById('fGenero').value;
-    const qtd = parseInt(document.getElementById('fQtd').value);
-    const preco = parseFloat(document.getElementById('fPreco').value);
-
-    if (!titulo || !autor || isNaN(qtd) || isNaN(preco)) {
-        showToast('⚠️ Preencha os campos.', 'error');
-        return;
-    }
-
-    const data = { titulo, autor, genero, qtd, preco };
-    const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-
-    try {
-        const method = editingId ? 'PUT' : 'POST';
-        const url = editingId ? `/books/${editingId}` : '/books';
-
-        await fetch(url, {
-            method: method,
-            headers: { 
-                'Content-Type': 'application/json',
-                'X-CSRF-TOKEN': csrfToken 
-            },
-            body: JSON.stringify(data)
-        });
-
-        showToast(editingId ? '✅ Atualizado!' : '✅ Adicionado!', 'success');
-        closeModal();
-        fetchBooks();
-    } catch (err) {
-        showToast('Erro ao processar.', 'error');
-    }
-}
-
-// ... (as demais funções de render e modal permanecem as mesmas)
-
 /* =========================
-   ANIMAÇÕES
+   ANIMAÇÕES & EVENTOS
 ========================= */
 const observer = new IntersectionObserver((entries) => {
   entries.forEach(e => {
-    if (e.isIntersecting) {
-      e.target.classList.add('visible');
-    }
+    if (e.isIntersecting) e.target.classList.add('visible');
   });
 }, { threshold: 0.1 });
 
 document.querySelectorAll('.fade-up').forEach(el => observer.observe(el));
 
-/* =========================
-   SCROLL SUAVE
-========================= */
 document.querySelectorAll('a[href^="#"]').forEach(a => {
   a.addEventListener('click', e => {
     const target = document.querySelector(a.getAttribute('href'));
@@ -273,9 +276,6 @@ document.querySelectorAll('a[href^="#"]').forEach(a => {
   });
 });
 
-/* =========================
-   ESC FECHA MODAL
-========================= */
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeModal();
 });
@@ -283,4 +283,6 @@ document.addEventListener('keydown', e => {
 /* =========================
    INICIALIZAÇÃO
 ========================= */
-fetchBooks();
+document.addEventListener('DOMContentLoaded', () => {
+  fetchBooks();
+});

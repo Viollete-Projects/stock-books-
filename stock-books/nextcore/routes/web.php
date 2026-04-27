@@ -3,11 +3,12 @@
 use App\Http\Controllers\BookController;
 use Illuminate\Support\Facades\Route;
 
-// Páginas
-Route::get('/', function () { return view('nextcore'); })->name('home');
-Route::get('/segunda-pagina', function () { return view('segunda_pagina'); })->name('segunda');
+// Apenas a Home
+Route::get('/', function () { 
+    return view('nextcore'); 
+})->name('home');
 
-// API de Livros
+// API de Livros (Mantenha se for usar o Controller)
 Route::prefix('books')->group(function () {
     Route::get('/', [BookController::class, 'index']);
     Route::post('/', [BookController::class, 'store']);
